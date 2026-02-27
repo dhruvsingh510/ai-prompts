@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 import re
 
 
-class KycAgent:
+class ApplicationAgent:
     def __init__(self, dynamic_variables: Dict[Any, Any], logger):
         self.logger = logger
 
