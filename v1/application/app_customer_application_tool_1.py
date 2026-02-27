@@ -13,69 +13,35 @@ class ApplicationStartTool:
             user_confirmation: str = Field(
                 description="User response confirming whether they want to start the application (yes/no)"
             )
-            application_status: str = Field(
-                description="Current application status"
-            )
 
         @tool(
             "start_application",
-            description="Starts the credit card application depending on KYC completion status.",
+            description="Starts the credit card application. Call this when the user confirms they want to proceed with the recommended card. After application starts, KYC details must be collected.",
             args_schema=StartApplicationRequest,
         )
         def start_application(
             user_confirmation: str,
-            application_status: str,
         ) -> Dict[str, Any]:
-
             try:
                 confirmation = user_confirmation.strip().lower()
 
                 if confirmation not in ["yes", "y"]:
                     return {
                         "message": "Application has not been started.",
-                        "application_status": application_status,
+                        "application_status": "not_started",
                         "status": "success"
                     }
 
-                # User confirmed yes
-                if application_status == "kyc_pending":
-                    return {
-                        "message": (
-                            "Your KYC verification is still under progress. "
-                            "The application will start once KYC is completed."
-                        ),
-                        "application_status": "kyc_pending",
-                        "status": "success"
-                    }
-
-                elif application_status == "kyc_invalid":
-                    return {
-                        "message": (
-                            "Your KYC details are invalid. "
-                            "Please re-submit your phone number and Aadhaar to proceed."
-                        ),
-                        "application_status": "kyc_invalid",
-                        "status": "success"
-                    }
-
-                elif application_status == "kyc_collected":
-                    self.logger.info("Application started successfully")
-
-                    return {
-                        "message": (
-                            "Your application has been successfully started. "
-                            "KYC verification is complete."
-                        ),
-                        "application_status": "under_review",
-                        "status": "success"
-                    }
-
-                else:
-                    return {
-                        "message": "Application cannot be started in the current state.",
-                        "application_status": application_status,
-                        "status": "failed"
-                    }
+                self.logger.info("Application started successfully")
+                return {
+                    "message": (
+                        "Your application has been started successfully. "
+                        "We now need to collect your KYC details to proceed."
+                    ),
+                    "application_status": "application_started_kyc_pending",
+                    "next_step": "collect_kyc_details",
+                    "status": "success"
+                }
 
             except Exception as e:
                 self.logger.error(f"Start application error: {e}")

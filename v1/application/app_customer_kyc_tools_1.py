@@ -1,68 +1,36 @@
 from typing import Dict, Any, Optional
 from langchain_core.tools import tool
-from pydantic import BaseModel, Field, ValidationError
-from langchain_core.messages import SystemMessage, HumanMessage
-import json
+from pydantic import BaseModel, Field
 import re
 
 
-class ApplicationAgent:
+class KycAgent:
     def __init__(self, dynamic_variables: Dict[Any, Any], logger):
         self.logger = logger
-        self.llm = dynamic_variables.get("llm")
 
     def create_collect_kyc_details_tool(self):
 
-        class KYCOutput(BaseModel):
-            phone_number: Optional[str]
-            aadhaar_number: Optional[str]
-
         class KYCRequest(BaseModel):
-            raw_user_input: str
-            existing_phone_number: Optional[str] = None
-            existing_aadhaar_number: Optional[str] = None
+            phone_number: Optional[str] = Field(
+                default=None,
+                description="10-digit Indian mobile number"
+            )
+            aadhaar_number: Optional[str] = Field(
+                default=None,
+                description="12-digit Aadhaar number"
+            )
 
         @tool(
             "collect_kyc_details",
-            description="Extracts and validates phone and Aadhaar details. Merges with existing state safely.",
+            description="Validates phone number and Aadhaar number for KYC. Pass each field individually after collecting from the user.",
             args_schema=KYCRequest,
         )
         def collect_kyc_details(
-            raw_user_input: str,
-            existing_phone_number: Optional[str] = None,
-            existing_aadhaar_number: Optional[str] = None,
+            phone_number: Optional[str] = None,
+            aadhaar_number: Optional[str] = None,
         ) -> Dict[str, Any]:
 
             try:
-                system_prompt = """
-You are a structured data extraction engine.
-
-Extract:
-- phone_number (10 digit Indian number)
-- aadhaar_number (12 digit number)
-
-Rules:
-- Remove spaces and dashes.
-- Do not invent data.
-- If not found in THIS message, return null.
-- Output strictly valid JSON.
-"""
-
-                messages = [
-                    SystemMessage(content=system_prompt),
-                    HumanMessage(content=raw_user_input)
-                ]
-
-                response = self.llm.invoke(messages)
-                extracted_json = json.loads(response.content)
-                validated_data = KYCOutput(**extracted_json)
-
-                # --------------------------
-                # Merge With Existing State
-                # --------------------------
-                phone_raw = validated_data.phone_number or existing_phone_number
-                aadhaar_raw = validated_data.aadhaar_number or existing_aadhaar_number
-
                 phone_clean = None
                 aadhaar_clean = None
                 phone_valid = False
@@ -72,8 +40,8 @@ Rules:
                 # --------------------------
                 # Validate Phone
                 # --------------------------
-                if phone_raw:
-                    phone_clean = re.sub(r"\D", "", phone_raw)
+                if phone_number:
+                    phone_clean = re.sub(r"\D", "", phone_number)
                     if len(phone_clean) == 10 and phone_clean[0] in ["6", "7", "8", "9"]:
                         phone_valid = True
                     else:
@@ -84,8 +52,8 @@ Rules:
                 # --------------------------
                 # Validate Aadhaar
                 # --------------------------
-                if aadhaar_raw:
-                    aadhaar_clean = re.sub(r"\D", "", aadhaar_raw)
+                if aadhaar_number:
+                    aadhaar_clean = re.sub(r"\D", "", aadhaar_number)
                     if len(aadhaar_clean) == 12:
                         aadhaar_valid = True
                     else:
@@ -94,14 +62,14 @@ Rules:
                     invalid_fields.append("aadhaar_number")
 
                 # --------------------------
-                # Determine Final State
+                # Determine Status
                 # --------------------------
                 if phone_valid and aadhaar_valid:
                     application_status = "kyc_collected"
-                elif phone_raw or aadhaar_raw:
-                    application_status = "kyc_invalid"
                 else:
-                    application_status = "kyc_pending"
+                    application_status = "kyc_invalid"
+
+                self.logger.info(f"KYC validation result: phone={phone_valid}, aadhaar={aadhaar_valid}")
 
                 return {
                     "phone_number": phone_clean,
@@ -114,13 +82,6 @@ Rules:
                     "status": "success"
                 }
 
-            except ValidationError as ve:
-                self.logger.error(f"KYC validation error: {ve}")
-                return {
-                    "error": "Structured validation failed.",
-                    "status": "failed"
-                }
-
             except Exception as e:
                 self.logger.error(f"KYC parsing error: {e}")
                 return {
@@ -130,5 +91,54 @@ Rules:
 
         return collect_kyc_details
 
+    def create_submit_application_tool(self):
+
+        class SubmitApplicationRequest(BaseModel):
+            phone_number: str = Field(description="Validated 10-digit phone number")
+            aadhaar_number: str = Field(description="Validated 12-digit Aadhaar number")
+            user_confirmation: str = Field(description="User confirmation to submit (yes/no)")
+
+        @tool(
+            "submit_application",
+            description="Submits the credit card application after KYC is validated and user confirms. Only call after collect_kyc_details returns kyc_valid=true and user confirms submission.",
+            args_schema=SubmitApplicationRequest,
+        )
+        def submit_application(
+            phone_number: str,
+            aadhaar_number: str,
+            user_confirmation: str,
+        ) -> Dict[str, Any]:
+            try:
+                confirmation = user_confirmation.strip().lower()
+
+                if confirmation not in ["yes", "y"]:
+                    return {
+                        "message": "Application submission cancelled by user.",
+                        "application_status": "kyc_collected",
+                        "status": "success"
+                    }
+
+                self.logger.info("Application submitted successfully")
+                return {
+                    "message": (
+                        "Your credit card application has been submitted successfully! "
+                        "You will receive a confirmation shortly."
+                    ),
+                    "application_status": "submitted",
+                    "status": "success"
+                }
+
+            except Exception as e:
+                self.logger.error(f"Submit application error: {e}")
+                return {
+                    "error": str(e),
+                    "status": "failed"
+                }
+
+        return submit_application
+
     def get_tools(self):
-        return [self.create_collect_kyc_details_tool()]
+        return [
+            self.create_collect_kyc_details_tool(),
+            self.create_submit_application_tool(),
+        ]
